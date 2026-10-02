@@ -1,0 +1,458 @@
+openapi: 3.1.0
+info:
+  title: GachaSLop API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /healthz:
+    get:
+      operationId: health
+      responses:
+        "200":
+          description: Process is alive
+  /readyz:
+    get:
+      operationId: readiness
+      responses:
+        "200":
+          description: Process and database are ready
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /api/v1/banners:
+    get:
+      operationId: listBanners
+      description: Public schedule, independent of imported accounts. Cached in the database for 15 minutes.
+      parameters:
+        - name: game
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Game"
+      responses:
+        "200":
+          description: Latest available schedule; stale is true when the source failed and a saved snapshot is returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BannerSchedule"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          description: Source unavailable and no saved schedule exists.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                example: 60
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sync-jobs:
+    post:
+      operationId: createSyncJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSyncJob"
+      responses:
+        "202":
+          description: Sync accepted
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncJob"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /api/v1/sync-jobs/{id}:
+    get:
+      operationId: getSyncJob
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Sync state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncJob"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/accounts:
+    get:
+      operationId: listAccounts
+      responses:
+        "200":
+          description: Accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Account"
+  /api/v1/accounts/{id}:
+    get:
+      operationId: getAccount
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/accounts/{id}/pulls:
+    get:
+      operationId: listPulls
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - name: pool_family
+          in: query
+          schema:
+            $ref: "#/components/schemas/PoolFamily"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: rarity
+          in: query
+          schema:
+            type: integer
+            enum: [3, 4, 5]
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Pull page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Pull"
+                  next_cursor:
+                    type: string
+  /api/v1/accounts/{id}/summary:
+    get:
+      operationId: getAccountSummary
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Aggregate statistics for the entire saved account history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountSummary"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/accounts/{id}/pity:
+    get:
+      operationId: getPity
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Pity groups
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PityStats"
+components:
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    Game:
+      type: string
+      enum: [genshin, hsr, zzz, wuwa]
+    PoolFamily:
+      type: string
+      enum: [beginner, standard, limited_character, limited_weapon, chronicled, bangboo, other]
+    BannerItem:
+      type: object
+      required: [id, name, rarity, kind]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        image_url:
+          type: string
+          format: uri
+        rarity:
+          type: integer
+        art_url:
+          type: string
+          format: uri
+          description: Optional full character artwork, separate from the small image_url icon. May be absent if the artwork catalog is unavailable.
+        kind:
+          type: string
+          enum: [character, weapon]
+        element:
+          type: string
+    Banner:
+      type: object
+      required: [id, title, pool_family, image_kind, items, starts_at, ends_at, status]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        version:
+          type: string
+        pool_family:
+          $ref: "#/components/schemas/PoolFamily"
+        image_url:
+          type: string
+          format: uri
+        image_kind:
+          type: string
+          enum: [icon, banner]
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BannerItem"
+        starts_at:
+          type: [string, "null"]
+          format: date-time
+        ends_at:
+          type: [string, "null"]
+          format: date-time
+        status:
+          type: string
+          enum: [current, upcoming, ended, unknown]
+    BannerSchedule:
+      type: object
+      required: [game, items, source, source_url, time_note, fetched_at, stale]
+      properties:
+        game:
+          $ref: "#/components/schemas/Game"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Banner"
+        source:
+          type: string
+        source_url:
+          type: string
+          format: uri
+        time_note:
+          type: string
+          description: Upstream timezone and regional limitations; dates are not adapted to the imported account region.
+        fetched_at:
+          type: string
+          format: date-time
+        stale:
+          type: boolean
+        warning:
+          type: string
+    CreateSyncJob:
+      type: object
+      additionalProperties: false
+      required: [game, source_url]
+      properties:
+        game:
+          $ref: "#/components/schemas/Game"
+        source_url:
+          type: string
+          format: uri
+          description: Private, temporary URL copied from the in-game history page
+        account_id:
+          type: string
+          format: uuid
+          description: Use after the first import to enable incremental HoYo sync
+    SyncJob:
+      type: object
+      required: [id, game, status, fetched_count, imported_count, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        game:
+          $ref: "#/components/schemas/Game"
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        account_id:
+          type: string
+          format: uuid
+        fetched_count:
+          type: integer
+        imported_count:
+          type: integer
+        error_code:
+          type: string
+        error_message:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+    Account:
+      type: object
+      required: [id, game, uid, region, language, timezone_offset, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        game:
+          $ref: "#/components/schemas/Game"
+        uid:
+          type: string
+        region:
+          type: string
+        language:
+          type: string
+        timezone_offset:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Pull:
+      type: object
+      required: [id, account_id, external_id, gacha_type, source_pool, pool_family, pity_group, name, item_type, rarity, pulled_at, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        account_id:
+          type: string
+          format: uuid
+        external_id:
+          type: string
+        gacha_id:
+          type: string
+        gacha_type:
+          type: string
+        source_pool:
+          type: string
+        pool_family:
+          $ref: "#/components/schemas/PoolFamily"
+        pity_group:
+          type: string
+        item_id:
+          type: string
+        name:
+          type: string
+        item_type:
+          type: string
+        rarity:
+          type: integer
+        pulled_at:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    AccountSummary:
+      type: object
+      required: [total, five_star_count, four_star_count, last_import]
+      properties:
+        total:
+          type: integer
+        five_star_count:
+          type: integer
+        four_star_count:
+          type: integer
+        last_import:
+          oneOf:
+            - $ref: "#/components/schemas/SyncJob"
+            - type: "null"
+    PityStats:
+      type: object
+      required: [pity_group, pool_family, total, five_star_pity, five_star_certainty, four_star_pity, four_star_certainty, guarantee_state]
+      properties:
+        pity_group:
+          type: string
+        pool_family:
+          $ref: "#/components/schemas/PoolFamily"
+        total:
+          type: integer
+        five_star_pity:
+          type: integer
+        five_star_certainty:
+          type: string
+          enum: [exact, at_least]
+        four_star_pity:
+          type: integer
+        four_star_certainty:
+          type: string
+          enum: [exact, at_least]
+        guarantee_state:
+          type: string
+          enum: [unknown, "no", "yes"]
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ServiceUnavailable:
+      description: Service unavailable
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

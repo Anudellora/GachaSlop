@@ -1,0 +1,10 @@
+.git
+.env
+bin
+coverage.out
+data/*.db*
+web/node_modules
+web/dist
+web/test-results
+web/playwright-report
+web/*.tsbuildinfo
